@@ -569,6 +569,10 @@ TEST_URLS: dict[str, str] = {
     "firecross.jp": EPISODE_URL,
 }
 
+# A rental in the middle of the series: the free window grows from the first episode
+# (it reached 第6話 by 2026-11) and the newest one is free too, so stay clear of both ends.
+SITE_LOCKED_URL = f"{ORIGIN}/reader/20474"
+
 
 @pytest.mark.network
 @pytest.mark.parametrize("host", TEST_URLS)
@@ -590,7 +594,7 @@ def test_site_series_lists_episodes_oldest_first():
 
 @pytest.mark.network
 def test_site_locks_a_rental_without_an_account():
-    episode = FireCross().episode(LOCKED_URL)
+    episode = FireCross().episode(SITE_LOCKED_URL)
     assert episode.pages == ()
-    assert episode.episode_title == "第3話"
+    assert episode.episode_title == "第9話"
     assert episode.next_url is not None
