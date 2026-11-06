@@ -80,6 +80,7 @@ from .starts import Starts
 from .sukupara import Sukupara
 from .torch import Torch
 from .vcomi import Vcomi
+from .viz import Viz
 from .wings import Wings
 from .yanmaga import YanMaga
 from .yawaspi import Yawaspi
@@ -162,6 +163,7 @@ EXTRACTORS: tuple[type[Extractor], ...] = (
     Carula,
     Gakcomic,
     Cmoa,
+    Viz,
 )
 
 
@@ -282,6 +284,7 @@ __all__ = (
     "UnknownExtractorError",
     "UnsupportedUrlError",
     "Vcomi",
+    "Viz",
     "Wings",
     "YanJan",
     "YanMaga",

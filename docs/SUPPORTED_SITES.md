@@ -121,6 +121,7 @@ to-corona-ex.com
 tonarinoyj.jp
 to-ti.in
 vcomi.jp
+viz.com
 webcomic.ohtabooks.com
 yanmaga.jp
 yawaspi.com
@@ -260,6 +261,7 @@ zerosumonline.com
 | [路草](https://michikusacomics.jp/) | トゥーヴァージンズ | SpeedBinb | `michikusa` |
 | [コミックカルラ](https://carula.jp/) | 世界文化ブックス | note | `carula` |
 | [コミックシーモア](https://www.cmoa.jp/) | NTTソルマーレ | SpeedBinb | `cmoa` |
+| [VIZ Shonen Jump](https://www.viz.com/shonenjump) (English) | VIZ Media | - | `viz` |
 
 ## URL formats
 
@@ -415,3 +417,5 @@ zerosumonline.com
 | | `https://gakcomic.gakken.jp/comic/page-<slug>/` -- every episode, oldest first |
 | `cmoa` | `https://www.cmoa.jp/title/<title-id>/vol/<n>/` (also the volume's `/reader/sample/`, `/reader/browserviewer/` and `/bib/speedreader/` URLs) -- the 立ち読み, or the whole volume while it is free |
 | | `https://www.cmoa.jp/title/<title-id>/` -- every volume of the title, oldest first |
+| `viz` | `https://www.viz.com/shonenjump/<series>-chapter-<n>/chapter/<id>` (with or without `?action=read`) -- one chapter, while it is free to read |
+| | `https://www.viz.com/shonenjump/chapters/<series>` -- every chapter, oldest first (the members-only ones are skipped as locked) |
