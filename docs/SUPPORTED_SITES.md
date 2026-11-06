@@ -417,5 +417,5 @@ zerosumonline.com
 | | `https://gakcomic.gakken.jp/comic/page-<slug>/` -- every episode, oldest first |
 | `cmoa` | `https://www.cmoa.jp/title/<title-id>/vol/<n>/` (also the volume's `/reader/sample/`, `/reader/browserviewer/` and `/bib/speedreader/` URLs) -- the 立ち読み, or the whole volume while it is free |
 | | `https://www.cmoa.jp/title/<title-id>/` -- every volume of the title, oldest first |
-| `viz` | `https://www.viz.com/shonenjump/<series>-chapter-<n>/chapter/<id>` (with or without `?action=read`) -- one chapter, while it is free to read |
-| | `https://www.viz.com/shonenjump/chapters/<series>` -- every chapter, oldest first (the members-only ones are skipped as locked) |
+| `viz` | `https://www.viz.com/shonenjump/<series>-chapter-<n>/chapter/<id>` (with or without `?action=read`) -- one chapter, while it is free to read, or any chapter once signed in (`-u`) as a Shonen Jump member |
+| | `https://www.viz.com/shonenjump/chapters/<series>` -- every chapter, oldest first (the members-only ones are skipped as locked unless signed in as a member) |

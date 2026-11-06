@@ -18,6 +18,14 @@ A Rails site with a reader of its own (`manifest-viz-reader-*.js`):
   for page `n`, counted from 1, and gets back `{"ok": 1, "data": {"<n>":
   "<signed CloudFront URL>"}}`. A signed URL is good for about two minutes,
   so each page is signed just before it is fetched rather than all at once.
+- Members-only chapters open for a signed-in Shonen Jump member. Signing in
+  takes the CSRF token `/account/refresh_login_links` sets as `AUTH_TOKEN`,
+  sent back as `X-CSRF-Token` with a form POST of `login` and `pass` to
+  `/account/try_login`, which answers `{"ok": 1, "user_id": ...}` (or a 401
+  with `{"ok": 0}`) and leaves the session cookie behind. Before opening a
+  members-only chapter, the site asks `/manga/auth?device_id=3&manga_id=<id>`,
+  which says `{"ok": 1, "archive_info": {"ok": 1}}` when the account may
+  read it.
 - A page is served scrambled. The JPEG is the page cut into a 10 x 15 grid
   of cells with a 10px gutter between them; the outer ring of cells is in
   place, and the 8 x 13 inner cells are shuffled. The EXIF `ImageUniqueID`
@@ -38,7 +46,7 @@ from bs4 import BeautifulSoup
 from bs4.element import Tag
 from PIL import Image
 
-from getjmanga.errors import GetjmangaError, NotAnEpisodePageError, UnsupportedUrlError
+from getjmanga.errors import GetjmangaError, LoginError, NotAnEpisodePageError, UnsupportedUrlError
 from getjmanga.extractor import Episode, Extractor, Page, neighbours, ordinal
 
 if TYPE_CHECKING:
@@ -49,6 +57,14 @@ if TYPE_CHECKING:
 BASE_URL = "https://www.viz.com"
 #: Where the reader asks for a page's signed URL.
 PAGE_API = f"{BASE_URL}/manga/get_manga_url"
+#: Where the site asks whether the account may read a members-only chapter.
+AUTH_API = f"{BASE_URL}/manga/auth"
+#: What hands out the CSRF token, inside the account links it renders.
+LOGIN_LINKS = f"{BASE_URL}/account/refresh_login_links"
+#: Where the sign-in form posts.
+LOGIN_API = f"{BASE_URL}/account/try_login"
+#: What the site's own scripts send with every XHR.
+_XHR = {"X-Requested-With": "XMLHttpRequest"}
 
 # A series page: `/shonenjump/chapters/<series>`.
 _SERIES_PATH = re.compile(r"^/shonenjump/chapters/(?P<series>[^/]+)/?$")
@@ -58,6 +74,8 @@ _CHAPTER_PATH = re.compile(r"^/shonenjump/(?P<slug>[^/]+)/chapter/(?P<id>\d+)/?$
 _CHAPTER_LINK = re.compile(r"/shonenjump/[^/'\"?]+/chapter/\d+")
 # A reader variable the chapter page's script sets: `var pages = 15;`.
 _READER_VAR = re.compile(r"\bvar\s+(?P<name>\w+)\s*=\s*(?P<value>[^;\n]*);")
+# The CSRF token the account links set: `AUTH_TOKEN = "...";`.
+_AUTH_TOKEN = re.compile(r"\bAUTH_TOKEN\s*=\s*\"(?P<token>[^\"]+)\"")
 # The anchor id of a listed chapter: `ch-<number times 100>`.
 _CHAPTER_ANCHOR = re.compile(r"^ch-(?P<order>\d+)$")
 
@@ -249,7 +267,7 @@ def unscramble(image: Image.Image) -> Image.Image:
 
 
 class Viz(Extractor):
-    """Fetch the free Shonen Jump chapters from VIZ."""
+    """Fetch Shonen Jump chapters from VIZ: the free ones, and a member's."""
 
     NAME = "viz"
     HOSTS = ("www.viz.com",)
@@ -268,6 +286,8 @@ class Viz(Extractor):
         super().__init__(session)
         #: Series pages read, by URL: `episode()` and `series_urls()` share them.
         self._series: dict[str, Series] = {}
+        #: Whether `login()` signed in, so members-only chapters are worth asking about.
+        self._signed_in = False
 
     @classmethod
     def suitable(cls, url: str) -> bool:
@@ -345,8 +365,14 @@ class Viz(Extractor):
         listed = series.chapter(canonical)
         urls = [chapter.url for chapter in series.chapters]
         before, after = neighbours(urls, canonical)
+        members_only = listed is not None and not listed.free
         # A chapter the listing does not have is tried anyway: the page API says no when it may not be read.
-        readable = not reader.preview and (listed is None or listed.free) and self._readable(reader.manga_id, url)
+        # A members-only one is asked about only once signed in, and the way the site asks: `/manga/auth` first.
+        readable = (
+            not reader.preview
+            and (not members_only or (self._signed_in and self._authorised(reader.manga_id, url)))
+            and self._readable(reader.manga_id, url)
+        )
 
         return Episode(
             url=url,
@@ -363,7 +389,7 @@ class Viz(Extractor):
                 "chapter_number": reader.variables.get("chapterNumber", ""),
                 "pages": reader.pages,
                 "preview": reader.preview,
-                "members_only": listed is not None and not listed.free,
+                "members_only": members_only,
                 "series_url": reader.series_url,
             },
             writer=series.writer,
@@ -388,13 +414,65 @@ class Viz(Extractor):
             raise GetjmangaError(msg)
         return unscramble(self._fetch_image(signed, headers={**self.HEADERS, "Referer": episode.url}))
 
+    def login(self, url: str, username: str, password: str) -> None:  # noqa: ARG002 (one sign-in endpoint)
+        """Sign in, so the members-only chapters a Shonen Jump membership opens become readable.
+
+        Args:
+            url: Ignored; VIZ has one sign-in endpoint.
+            username: The account's email address or username.
+            password: The account's password.
+
+        Raises:
+            LoginError: VIZ handed out no CSRF token, or refused the credentials.
+        """
+        links = self._get(LOGIN_LINKS, headers={**self.HEADERS, **_XHR})
+        token = _AUTH_TOKEN.search(links.text)
+        if token is None:
+            msg = f"{LOGIN_LINKS} handed out no CSRF token."
+            raise LoginError(msg)
+        res = self._session.post(
+            LOGIN_API,
+            data={"login": username, "pass": password, "rem_user": "on", "uid": "0"},
+            headers={
+                **self.HEADERS,
+                **_XHR,
+                "X-CSRF-Token": token["token"],
+                "Accept": "application/json",
+                "Origin": BASE_URL,
+                "Referer": f"{BASE_URL}/shonenjump",
+            },
+            timeout=self.TIMEOUT,
+        )
+        try:
+            answer = res.json()
+        except ValueError:
+            answer = None
+        if not res.is_success or not isinstance(answer, dict) or answer.get("ok") != 1:
+            msg = f"VIZ refused the login for {username} (HTTP {res.status_code})."
+            raise LoginError(msg)
+        self._signed_in = True
+
+    def _authorised(self, manga_id: str, referer: str) -> bool:
+        """Whether `/manga/auth` lets the signed-in account read a members-only chapter."""
+        res = self._get(
+            AUTH_API,
+            headers={**self.HEADERS, **_XHR, "Referer": referer},
+            params={"device_id": 3, "manga_id": manga_id},
+        )
+        try:
+            body = res.json()
+        except ValueError:
+            return False
+        archive = body.get("archive_info") if isinstance(body, dict) else None
+        return isinstance(archive, dict) and body.get("ok") == 1 and archive.get("ok") == 1
+
     def _readable(self, manga_id: str, referer: str) -> bool:
         """Whether the page API signs the chapter's first page for this session."""
         return self._signed(self._page_api(manga_id, 1), referer) is not None
 
     def _signed(self, api_url: str, referer: str) -> str | None:
         """The signed URL the page API hands back for one page, or None when it says no."""
-        res = self._get(api_url, headers={**self.HEADERS, "Referer": referer, "X-Requested-With": "XMLHttpRequest"})
+        res = self._get(api_url, headers={**self.HEADERS, **_XHR, "Referer": referer})
         try:
             body = res.json()
         except ValueError:

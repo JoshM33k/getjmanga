@@ -60,6 +60,7 @@ class FakeSession(Client):
         self.params_seen = []
         self.headers_seen = []
         self.posts = []
+        self.post_headers = []
         self.puts = []
 
     def get(self, url, **kwargs):
@@ -83,6 +84,7 @@ class FakeSession(Client):
     def post(self, url, data=None, json=None, content=None, **_kwargs):
         body = data if data is not None else json
         self.posts.append((url, body if body is not None else content))
+        self.post_headers.append(_kwargs.get("headers") or {})
         return self._route(url)
 
     def put(self, url, data=None, **kwargs):

@@ -8,7 +8,7 @@ import pytest
 from PIL import Image
 
 from getjmanga.downloader import Downloader
-from getjmanga.errors import GetjmangaError, NotAnEpisodePageError, UnsupportedUrlError
+from getjmanga.errors import GetjmangaError, LoginError, NotAnEpisodePageError, UnsupportedUrlError
 from getjmanga.extractors.viz import COLUMNS, GUTTER, ROWS, Viz, unscramble
 
 SERIES_URL = "https://www.viz.com/shonenjump/chapters/kagurabachi"
@@ -18,6 +18,15 @@ EPISODE_URL = "https://www.viz.com/shonenjump/kagurabachi-chapter-2/chapter/4027
 LOCKED_URL = "https://www.viz.com/shonenjump/kagurabachi-chapter-3/chapter/40288"
 LATEST_URL = "https://www.viz.com/shonenjump/kagurabachi-chapter-4/chapter/52108"
 PAGE_API = "https://www.viz.com/manga/get_manga_url?device_id=3&manga_id=40275&pages="
+LOCKED_PAGE_API = "https://www.viz.com/manga/get_manga_url?device_id=3&manga_id=40288&pages="
+# What `/account/refresh_login_links` renders, CSRF token and all.
+LOGIN_LINKS_HTML = """<div id="o_account-links-content" logged_in="false"></div>
+<script>
+  AUTH_TOKEN = "csrf-token==";
+  $.ajaxSetup({ headers: { 'X-CSRF-Token': AUTH_TOKEN } });
+  user_id           = 0;
+  is_sj_subscriber  = false;
+</script>"""
 CDN = "https://d2vs6ffylckc3p.cloudfront.net/manga/new/chapter/kagurabachi2/sc"
 
 
@@ -93,6 +102,16 @@ def client(fake_session, fake_response):
         merged.setdefault("chapter/40288", fake_response(text=chapter_html("40288", "3")))
         for page in (1, 2, 3):
             merged.setdefault(f"{PAGE_API}{page}", fake_response(payload=signed(page), content_type="application/json"))
+            merged.setdefault(
+                f"{LOCKED_PAGE_API}{page}", fake_response(payload=signed(page), content_type="application/json")
+            )
+        merged.setdefault("refresh_login_links", fake_response(text=LOGIN_LINKS_HTML))
+        merged.setdefault(
+            "try_login", fake_response(payload={"ok": 1, "user_id": 123}, content_type="application/json")
+        )
+        merged.setdefault(
+            "manga/auth", fake_response(payload={"ok": 1, "archive_info": {"ok": 1}}, content_type="application/json")
+        )
         session = fake_session(merged)
         return Viz(session), session
 
@@ -173,7 +192,7 @@ def test_members_only_episode_is_not_readable_and_not_asked_for(client):
     assert episode.episode_title == "Chapter 3"
     assert episode.metadata["members_only"] is True
     assert (episode.prev_url, episode.next_url) == (EPISODE_URL, LATEST_URL)
-    assert not any("get_manga_url" in url for url in session.calls)
+    assert not any("/manga/" in url for url in session.calls)  # neither /manga/auth nor the page API
 
 
 def test_episode_the_page_api_refuses_is_not_readable(client, fake_response):
@@ -241,6 +260,60 @@ def test_series_urls_refuses_a_chapter_url(client):
     viz, _ = client()
     with pytest.raises(UnsupportedUrlError):
         viz.series_urls(EPISODE_URL)
+
+
+# --- signing in --------------------------------------------------------------------------------
+
+
+def test_login_posts_the_credentials_with_the_csrf_token(client):
+    viz, session = client()
+    viz.login(EPISODE_URL, "someone@example.com", "hunter2")
+
+    assert session.calls == ["https://www.viz.com/account/refresh_login_links"]
+    url, body = session.posts[0]
+    assert url == "https://www.viz.com/account/try_login"
+    assert body == {"login": "someone@example.com", "pass": "hunter2", "rem_user": "on", "uid": "0"}
+    assert session.post_headers[0]["X-CSRF-Token"] == "csrf-token=="
+    assert session.post_headers[0]["X-Requested-With"] == "XMLHttpRequest"
+
+
+def test_login_raises_when_viz_refuses_the_credentials(client, fake_response):
+    refused = fake_response(payload={"ok": 0}, status_code=HTTPStatus.UNAUTHORIZED, content_type="application/json")
+    viz, _ = client({"try_login": refused})
+    with pytest.raises(LoginError, match="HTTP 401"):
+        viz.login(EPISODE_URL, "someone@example.com", "wrong")
+
+
+def test_login_raises_without_a_csrf_token(client, fake_response):
+    viz, session = client({"refresh_login_links": fake_response(text="<div>maintenance</div>")})
+    with pytest.raises(LoginError, match="CSRF"):
+        viz.login(EPISODE_URL, "someone@example.com", "hunter2")
+    assert session.posts == []
+
+
+def test_members_only_episode_is_readable_once_a_member_signs_in(client):
+    viz, session = client()
+    viz.login(EPISODE_URL, "someone@example.com", "hunter2")
+    episode = viz.episode(LOCKED_URL)
+
+    assert [page.url for page in episode.pages] == [f"{LOCKED_PAGE_API}{page}" for page in (1, 2, 3)]
+    assert episode.metadata["members_only"] is True
+    assert session.calls[-2:] == ["https://www.viz.com/manga/auth", f"{LOCKED_PAGE_API}1"]
+    assert session.params_seen[-2] == {"device_id": 3, "manga_id": "40288"}
+    assert session.headers_seen[-2]["Referer"] == LOCKED_URL
+
+
+def test_members_only_episode_stays_locked_for_an_account_without_membership(client, fake_response):
+    no_membership = fake_response(
+        payload={"ok": 1, "archive_info": {"ok": 0, "err": {"code": 4}}}, content_type="application/json"
+    )
+    viz, session = client({"manga/auth": no_membership})
+    viz.login(EPISODE_URL, "someone@example.com", "hunter2")
+    episode = viz.episode(LOCKED_URL)
+
+    assert not episode.readable
+    assert episode.next_url == LATEST_URL
+    assert not any("get_manga_url" in url for url in session.calls)
 
 
 # --- unscrambling -------------------------------------------------------------------------------
