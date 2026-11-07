@@ -66,6 +66,9 @@ then reacts to `release: [published]` and does the PyPI and GHCR publish.
   prints, apart from `jm config`'s answers.
 - `getjmanga/cipher.py` -- the two ways page files are hidden in transit
   (AES-CBC, a repeating XOR key), undone.
+- `getjmanga/kindle.py` -- `-K`: every chapter of a series on disk as one
+  PDF for a Kindle Scribe (grayscale, fitted to the screen, a bookmark per
+  chapter), written page by page so a long series never sits in memory.
 - `getjmanga/search.py` -- `-s`: the links on an arbitrary web page that some
   extractor's `suitable()` takes, for the CLI to download one by one.
 

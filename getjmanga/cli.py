@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from httpx2 import HTTPError
 
-from . import __version__
+from . import __version__, kindle
 from .config import (
     KEYS,
     Config,
@@ -133,7 +133,7 @@ def parse_args(args: list[str] | None = None, *, patrol: bool = False) -> Namesp
             action="store_true",
             help="remember each url in the config file, for `%(prog)s patrol` to download what is new",
         )
-        # `-b`, `-B`, `-C`, `-d`, `-F`, `-m` and `-o` default to None so that the config file can fill them in.
+        # `-b`, `-B`, `-C`, `-d`, `-F`, `-K`, `-m` and `-o` default to None so that the config file can fill them in.
         chain = parser.add_mutually_exclusive_group()
         chain.add_argument("-b", "--bulk", action=BooleanOptionalAction, help="follow every next episode")
         chain.add_argument("-B", "--both", action=BooleanOptionalAction, help="follow every previous episode too")
@@ -152,6 +152,13 @@ def parse_args(args: list[str] | None = None, *, patrol: bool = False) -> Namesp
         "--cbz",
         action=BooleanOptionalAction,
         help="also pack the saved pages into <series>/_cbz/<episode>.cbz (pages already saved are packed as they are)",
+    )
+    parser.add_argument(
+        "-K",
+        "--kindle",
+        action=BooleanOptionalAction,
+        help="once downloaded, put every chapter of the series saved so far into <series>/<series>.pdf,"
+        " grayscale and sized for a Kindle Scribe, to send with Send to Kindle",
     )
     parser.add_argument("-o", "--overwrite", action=BooleanOptionalAction, help="download again if it exists")
     parser.add_argument("-m", "--metadata", action=BooleanOptionalAction, help="save episode metadata as json")
@@ -206,6 +213,8 @@ def apply_config(parsed: Namespace, config: Config) -> None:
         parsed.format = config.format if config.format is not None else "jpg"
     if parsed.cbz is None:
         parsed.cbz = config.cbz
+    if parsed.kindle is None:
+        parsed.kindle = config.kindle
     if parsed.metadata is None:
         parsed.metadata = config.metadata
     # `-b` and `-B` rule each other out: one given on the command line (or turned
@@ -246,7 +255,7 @@ def parse_config_args(args: list[str]) -> Namespace:
         setter.add_argument("value", choices=("true", "false"))
     fmt = commands.add_parser("format", help="set what -F defaults to")
     fmt.add_argument("value", choices=get_args(Format), help="image format to save each page as")
-    for name, flag in (("cbz", "-C"), ("metadata", "-m")):
+    for name, flag in (("cbz", "-C"), ("kindle", "-K"), ("metadata", "-m")):
         setter = commands.add_parser(name, help=f"set whether {flag} is on by default")
         setter.add_argument("value", choices=("true", "false"))
     patrol = commands.add_parser("patrol", help="add a url for `getjmanga patrol`, without downloading it now")
@@ -538,6 +547,8 @@ class Runner:
         self._extractors: dict[type[Extractor], Extractor] = {}
         self._logged_in: set[tuple[str, str]] = set()
         self._prompted: dict[str, str] = {}
+        #: The series `-K` makes a book of once everything is downloaded: their directory and title.
+        self._books: dict[Path, str] = {}
 
     def extractor(self, url: str) -> Extractor:
         """The extractor for `url`: the one `-e` named, or the first that takes it."""
@@ -617,10 +628,35 @@ class Runner:
             finally:
                 # Whatever ended the work, the display comes down and says what it got through.
                 self.display.done()
+            if parsed.kindle:
+                self._want_books(visited)
             if series and all(result.status == "locked" for result in visited):
                 msg = f"no episode in the series at {url} was readable."
                 raise NothingReadableError(msg)
             return visited
+
+    def _want_books(self, visited: list[Result]) -> None:
+        """Mark the series of `visited` for `books()`: those with a chapter new on disk, or no book yet."""
+        for result in visited:
+            if result.status == "locked":
+                continue
+            series_dir = result.save_dir.parent
+            if result.saved or not book_path(series_dir).exists():
+                self._books[series_dir] = result.episode.series_title
+
+    def books(self) -> None:
+        """Write the book of every series `-K` marked, with every chapter of it on disk."""
+        for series_dir, title in self._books.items():
+            out = book_path(series_dir)
+            count = kindle.build(series_dir, title, out)
+            if not count:
+                continue
+            logger.info("book: %s (%d pages, %.1f MB)", out, count, out.stat().st_size / 1024 / 1024)
+            if out.stat().st_size > kindle.SEND_LIMIT:
+                logger.warning(
+                    "warning: %s is over the 200 MB Send to Kindle takes; copy it over USB instead.", out.name
+                )
+        self._books.clear()
 
     def visit(self, work: Work, *, bulk: bool | None = None, back: bool | None = None) -> Work | None:
         """Download `work`, the way `-S` stored it, and say what to store now.
@@ -720,6 +756,11 @@ class Runner:
         return links
 
 
+def book_path(series_dir: Path) -> Path:
+    """Where `-K` writes the book of a series: `<series>/<series>.pdf`."""
+    return series_dir / f"{series_dir.name}.pdf"
+
+
 def make_runner(parsed: Namespace) -> Runner:
     """Build the runner for a parsed command line: set the display up, settle the password, read the config.
 
@@ -766,6 +807,7 @@ def patrol_main(args: list[str]) -> None:
                 store_work(stored, parsed.config, replacing=work.url)
         except (GetjmangaError, HTTPError) as exc:
             logger.warning("skip: %s: %s", work.url, exc)
+    runner.books()
     logger.info("done.")
 
 
@@ -790,6 +832,7 @@ def main(args: list[str] | None = None) -> None:
             if parsed.store and stored is not None:
                 path = store_work(stored, parsed.config)
                 logger.info("stored: %s in %s", stored.url, path)
+        runner.books()
     except (GetjmangaError, HTTPError) as exc:
         logger.error("%s", exc)
         raise SystemExit(1) from exc
