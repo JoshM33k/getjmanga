@@ -96,6 +96,26 @@ def test_download_writes_again_when_told_to(tmp_path):
     assert result.status == "saved"
 
 
+class Failing(Canned):
+    """Fails on the second page, the way a dropped connection or a refused request would."""
+
+    def image(self, page, episode):
+        if len(self.fetched) == 1:
+            raise OSError("connection reset")
+        return super().image(page, episode)
+
+
+def test_an_episode_cut_short_is_downloaded_again_on_the_next_run(tmp_path):
+    with pytest.raises(OSError, match="connection reset"):
+        Downloader(Failing(episode()), tmp_path).download("u")
+    assert not (tmp_path / "example.com" / "Series" / "Episode 1").exists()
+
+    result = Downloader(Canned(episode()), tmp_path).download("u")
+    assert result.status == "saved"
+    assert sorted(path.name for path in (tmp_path / "example.com" / "Series").iterdir()) == ["Episode 1"]
+    assert sorted(path.name for path in result.save_dir.iterdir()) == ["0.jpg", "1.jpg", "2.jpg"]
+
+
 def test_download_reports_an_episode_without_pages_as_locked(tmp_path):
     result = Downloader(Canned(episode(pages=0)), tmp_path).download("u")
 

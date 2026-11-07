@@ -35,7 +35,9 @@ A Rails site with a reader of its own (`manifest-viz-reader-*.js`):
 
 from __future__ import annotations
 
+import logging
 import re
+import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from http import HTTPStatus
@@ -54,6 +56,8 @@ if TYPE_CHECKING:
 
     from httpx2 import Client, Response
 
+_log = logging.getLogger(__name__)
+
 BASE_URL = "https://www.viz.com"
 #: Where the reader asks for a page's signed URL.
 PAGE_API = f"{BASE_URL}/manga/get_manga_url"
@@ -63,6 +67,10 @@ AUTH_API = f"{BASE_URL}/manga/auth"
 LOGIN_LINKS = f"{BASE_URL}/account/refresh_login_links"
 #: Where the sign-in form posts.
 LOGIN_API = f"{BASE_URL}/account/try_login"
+#: Seconds to wait before each new try of a request VIZ turned away with 429 Too Many
+#: Requests, unless it says how long in `Retry-After`; after the last, the 429 stands.
+#: The page API starts doing so a few hundred pages into a long series.
+BACKOFF = (10, 30, 60, 120, 300)
 #: What the site's own scripts send with every XHR.
 _XHR = {"X-Requested-With": "XMLHttpRequest"}
 
@@ -454,11 +462,7 @@ class Viz(Extractor):
 
     def _authorised(self, manga_id: str, referer: str) -> bool:
         """Whether `/manga/auth` lets the signed-in account read a members-only chapter."""
-        res = self._get(
-            AUTH_API,
-            headers={**self.HEADERS, **_XHR, "Referer": referer},
-            params={"device_id": 3, "manga_id": manga_id},
-        )
+        res = self._patiently(AUTH_API, referer, params={"device_id": 3, "manga_id": manga_id})
         try:
             body = res.json()
         except ValueError:
@@ -472,7 +476,7 @@ class Viz(Extractor):
 
     def _signed(self, api_url: str, referer: str) -> str | None:
         """The signed URL the page API hands back for one page, or None when it says no."""
-        res = self._get(api_url, headers={**self.HEADERS, **_XHR, "Referer": referer})
+        res = self._patiently(api_url, referer)
         try:
             body = res.json()
         except ValueError:
@@ -482,6 +486,20 @@ class Viz(Extractor):
         page = api_url.rsplit("=", 1)[-1]
         signed = body["data"].get(page)
         return signed if isinstance(signed, str) and signed.startswith("https://") else None
+
+    def _patiently(self, url: str, referer: str, params: dict[str, str | int] | None = None) -> Response:
+        """GET one of the reader's API endpoints, waiting out a 429 the way `BACKOFF` says."""
+        headers = {**self.HEADERS, **_XHR, "Referer": referer}
+        for wait in (*BACKOFF, None):
+            res = self._session.get(url, headers=headers, params=params, timeout=self.TIMEOUT)
+            if res.status_code != HTTPStatus.TOO_MANY_REQUESTS or wait is None:
+                break
+            asked = res.headers.get("Retry-After", "")
+            delay = int(asked) if asked.isdigit() else wait
+            _log.info("viz: too many requests; waiting %d seconds.", delay)
+            time.sleep(delay)
+        res.raise_for_status()
+        return res
 
     @staticmethod
     def _page_api(manga_id: str, page: int) -> str:

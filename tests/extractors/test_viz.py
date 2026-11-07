@@ -5,11 +5,12 @@ from http import HTTPStatus
 from io import BytesIO
 
 import pytest
+from httpx2 import HTTPStatusError
 from PIL import Image
 
 from getjmanga.downloader import Downloader
 from getjmanga.errors import GetjmangaError, LoginError, NotAnEpisodePageError, UnsupportedUrlError
-from getjmanga.extractors.viz import COLUMNS, GUTTER, ROWS, Viz, unscramble
+from getjmanga.extractors.viz import BACKOFF, COLUMNS, GUTTER, ROWS, Viz, unscramble
 
 SERIES_URL = "https://www.viz.com/shonenjump/chapters/kagurabachi"
 FIRST_URL = "https://www.viz.com/shonenjump/kagurabachi-chapter-1/chapter/40223"
@@ -420,6 +421,34 @@ def test_download_fails_on_a_page_the_api_will_not_sign(client, fake_response):
 
     with pytest.raises(GetjmangaError, match="would not sign"):
         viz.image(episode.pages[1], episode)
+
+
+def test_a_page_the_api_turns_away_for_too_many_requests_is_tried_again(client, fake_response, monkeypatch):
+    waits = []
+    monkeypatch.setattr("getjmanga.extractors.viz.time.sleep", waits.append)
+    viz, session = client()
+    episode = viz.episode(EPISODE_URL)
+    session.routes[f"{PAGE_API}2"] = [
+        fake_response(status_code=HTTPStatus.TOO_MANY_REQUESTS),
+        fake_response(status_code=HTTPStatus.TOO_MANY_REQUESTS, headers={"Retry-After": "3"}),
+        fake_response(payload=signed(2), content_type="application/json"),
+    ]
+
+    assert viz._signed(episode.pages[1].url, EPISODE_URL) == f"{CDN}/2.jpg?Expires=1794006244&Signature=x"
+    # The first wait is the backoff's own; the second, what the server asked for.
+    assert waits == [10, 3]
+
+
+def test_a_page_the_api_keeps_turning_away_fails_in_the_end(client, fake_response, monkeypatch):
+    waits = []
+    monkeypatch.setattr("getjmanga.extractors.viz.time.sleep", waits.append)
+    viz, session = client()
+    episode = viz.episode(EPISODE_URL)
+    session.routes[f"{PAGE_API}2"] = fake_response(status_code=HTTPStatus.TOO_MANY_REQUESTS)
+
+    with pytest.raises(HTTPStatusError):
+        viz.image(episode.pages[1], episode)
+    assert waits == list(BACKOFF)
 
 
 # --- the real site --------------------------------------------------------------------
