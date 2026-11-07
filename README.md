@@ -80,6 +80,8 @@ jm -C https://takecomic.jp/episodes/74f33031e13cd
 jm -K https://www.viz.com/shonenjump/chapters/kagurabachi
 # five chapters each instead
 jm -K --per-book 5 https://www.viz.com/shonenjump/chapters/kagurabachi
+# the whole series in one book: <series>/_kindle/<series>.cbz
+jm -K --per-book 0 https://www.viz.com/shonenjump/chapters/kagurabachi
 
 # every link on a page that some extractor takes
 jm -s https://shonenjumpplus.com/

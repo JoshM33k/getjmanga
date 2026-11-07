@@ -72,16 +72,21 @@ def plan(series_dir: Path, title: str, per_book: int = PER_BOOK) -> list[Book]:
 
     A chapter's number is the first number in its directory name ("Chapter
     112.1" is 112); a chapter with none counts by its place in the list.
-    Chapters 1 to `per_book` go into the first book, and so on.
+    Chapters 1 to `per_book` go into the first book, and so on. With
+    `per_book` 0 every chapter goes into one book, named and titled after
+    the series alone: `<series>/_kindle/<series>.cbz`.
 
     Args:
         series_dir: `<savedir>/<host>/<series>`, whose chapter directories to read.
         title: The series title; each book is titled after it and its range.
-        per_book: How many chapter numbers a book covers.
+        per_book: How many chapter numbers a book covers; 0 for the whole series.
 
     Returns:
         One book per range that has a chapter on disk, in order.
     """
+    if per_book == 0:
+        found = tuple(chapters(series_dir))
+        return [Book(series_dir / KINDLE_DIR / f"{series_dir.name}.cbz", title, title, found)] if found else []
     groups: dict[int, list[Path]] = {}
     for index, chapter in enumerate(chapters(series_dir)):
         found = re.search(r"\d+", chapter.name)

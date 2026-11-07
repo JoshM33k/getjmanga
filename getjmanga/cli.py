@@ -89,11 +89,11 @@ def extractor_list() -> str:
     return "\n".join(lines)
 
 
-def positive(value: str) -> int:
-    """A whole number above 0, for `--per-book`."""
+def not_negative(value: str) -> int:
+    """A whole number, 0 or above, for `--per-book`."""
     number = int(value)
-    if number < 1:
-        msg = f"{value} is not above 0"
+    if number < 0:
+        msg = f"{value} is below 0"
         raise ArgumentTypeError(msg)
     return number
 
@@ -173,9 +173,9 @@ def parse_args(args: list[str] | None = None, *, patrol: bool = False) -> Namesp
     parser.add_argument(
         "--per-book",
         metavar="N",
-        type=positive,
+        type=not_negative,
         default=kindle.PER_BOOK,
-        help="how many chapters -K puts in one book",
+        help="how many chapters -K puts in one book; 0 puts the whole series in <series>/_kindle/<series>.cbz",
     )
     parser.add_argument("-o", "--overwrite", action=BooleanOptionalAction, help="download again if it exists")
     parser.add_argument("-m", "--metadata", action=BooleanOptionalAction, help="save episode metadata as json")

@@ -62,7 +62,19 @@ def test_plan_groups_the_chapters_by_their_number(tmp_path):
     ]
 
 
+def test_plan_puts_the_whole_series_in_one_book_with_per_book_zero(tmp_path):
+    series = tmp_path / "Series"
+    for name in ("Chapter 10", "Chapter 9", "Chapter 112.1"):
+        chapter(series, name)
+
+    [book] = plan(series, "S", per_book=0)
+    assert (book.path.name, book.title) == ("Series.cbz", "S")
+    assert [path.name for path in book.chapters] == ["Chapter 9", "Chapter 10", "Chapter 112.1"]
+    assert plan(tmp_path / "Series", "S", per_book=0) == [book]
+
+
 def test_plan_has_no_book_for_a_series_with_no_pages(tmp_path):
     series = tmp_path / "Series"
     (series / "_cbz").mkdir(parents=True)
     assert plan(series, "Series") == []
+    assert plan(series, "Series", per_book=0) == []
