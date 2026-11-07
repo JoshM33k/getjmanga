@@ -1,26 +1,25 @@
 from __future__ import annotations
 
-import io
+import zipfile
 
+from cbz import ComicInfo
 from PIL import Image
-from pypdf import PdfReader
-from pypdf.generic import Destination
 
-from getjmanga.kindle import SCREEN, build, plan
+from getjmanga.kindle import build, plan
 
 
-def chapter(series, name, *sizes):
+def chapter(series, name, pages=1):
     path = series / name
     path.mkdir(parents=True)
-    for index, size in enumerate(sizes or [(8, 12)]):
-        Image.new("RGB", size, (200, 10, 10)).save(path / f"{index}.jpg")
+    for index in range(pages):
+        Image.new("RGB", (8, 12), (index * 40, 10, 10)).save(path / f"{index}.png")
     return path
 
 
 def test_build_writes_the_chapters_of_a_book_in_reading_order(tmp_path):
     series = tmp_path / "Series"
-    chapter(series, "Chapter 10", (800, 1200))
-    chapter(series, "Chapter 9", (4000, 6000), (800, 1200))
+    chapter(series, "Chapter 10")
+    chapter(series, "Chapter 9", pages=2)
     (series / "Chapter 9" / "metadata.json").write_text("{}")
     (series / "_cbz").mkdir()
     (series / "empty").mkdir()
@@ -28,18 +27,19 @@ def test_build_writes_the_chapters_of_a_book_in_reading_order(tmp_path):
 
     assert build(book) == 3
 
-    assert book.path == series / "_kindle" / "Series 001-010.pdf"
-    reader = PdfReader(book.path, strict=True)
-    assert reader.metadata is not None
-    assert reader.metadata.title == "かぐらバチ 001-010"
-    marks = [mark for mark in reader.outline if isinstance(mark, Destination)]
-    assert [mark.title for mark in marks] == ["Chapter 9", "Chapter 10"]
-    assert [reader.get_destination_page_number(mark) for mark in marks] == [0, 2]
-    images = [Image.open(io.BytesIO(page.images[0].data)) for page in reader.pages]
-    # Grayscale throughout; scaled down to fit the screen, never up.
-    assert [image.mode for image in images] == ["L", "L", "L"]
-    assert [image.size for image in images] == [(1653, SCREEN[1]), (800, 1200), (800, 1200)]
-    assert not book.path.with_name("Series 001-010.pdf.part").exists()
+    assert book.path == series / "_kindle" / "Series 001-010.cbz"
+    comic = ComicInfo.from_cbz(book.path)
+    assert (comic.title, comic.series) == ("かぐらバチ 001-010", "かぐらバチ")
+    assert [page.bookmark for page in comic.pages] == ["Chapter 9", "", "Chapter 10"]
+    # The pages go in as they were saved, in reading order.
+    expected = [
+        (series / name / page).read_bytes()
+        for name, page in [("Chapter 9", "0.png"), ("Chapter 9", "1.png"), ("Chapter 10", "0.png")]
+    ]
+    with zipfile.ZipFile(book.path) as archive:
+        names = sorted(name for name in archive.namelist() if name != "ComicInfo.xml")
+        assert [archive.read(name) for name in names] == expected
+    assert not book.path.with_name("Series 001-010.cbz.part").exists()
 
 
 def test_plan_groups_the_chapters_by_their_number(tmp_path):
@@ -50,15 +50,15 @@ def test_plan_groups_the_chapters_by_their_number(tmp_path):
     books = plan(series, "S")
     assert [(book.path.name, book.title, [path.name for path in book.chapters]) for book in books] == [
         # "Extra" has no number, so it counts by its place in the list: the fifth.
-        ("Series 001-010.pdf", "S 001-010", ["Chapter 9", "Chapter 10", "Extra"]),
-        ("Series 011-020.pdf", "S 011-020", ["Chapter 11"]),
-        ("Series 111-120.pdf", "S 111-120", ["Chapter 112.1"]),
+        ("Series 001-010.cbz", "S 001-010", ["Chapter 9", "Chapter 10", "Extra"]),
+        ("Series 011-020.cbz", "S 011-020", ["Chapter 11"]),
+        ("Series 111-120.cbz", "S 111-120", ["Chapter 112.1"]),
     ]
     assert [book.path.name for book in plan(series, "S", per_book=5)] == [
-        "Series 001-005.pdf",
-        "Series 006-010.pdf",
-        "Series 011-015.pdf",
-        "Series 111-115.pdf",
+        "Series 001-005.cbz",
+        "Series 006-010.cbz",
+        "Series 011-015.cbz",
+        "Series 111-115.cbz",
     ]
 
 

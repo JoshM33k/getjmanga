@@ -167,8 +167,8 @@ def parse_args(args: list[str] | None = None, *, patrol: bool = False) -> Namesp
         "-K",
         "--kindle",
         action=BooleanOptionalAction,
-        help="once downloaded, put the chapters of the series saved so far into PDFs for a Kindle Scribe,"
-        " grayscale and sized for its screen: <series>/_kindle/<series> 001-010.pdf and so on",
+        help="once downloaded, put the chapters of the series saved so far into comic archives of ten chapters"
+        " each, for calibre to convert for a Kindle: <series>/_kindle/<series> 001-010.cbz and so on",
     )
     parser.add_argument(
         "--per-book",
