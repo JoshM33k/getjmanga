@@ -451,6 +451,19 @@ def test_a_page_the_api_keeps_turning_away_fails_in_the_end(client, fake_respons
     assert waits == list(BACKOFF)
 
 
+def test_a_chapter_page_turned_away_for_too_many_requests_is_tried_again(client, fake_response, monkeypatch):
+    waits = []
+    monkeypatch.setattr("getjmanga.extractors.viz.time.sleep", waits.append)
+    viz, session = client()
+    session.routes["chapter/40275"] = [
+        fake_response(status_code=HTTPStatus.TOO_MANY_REQUESTS),
+        session.routes["chapter/40275"],
+    ]
+
+    assert len(viz.episode(EPISODE_URL).pages) == 3
+    assert waits == [BACKOFF[0]]
+
+
 # --- the real site --------------------------------------------------------------------
 
 

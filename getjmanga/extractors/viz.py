@@ -462,7 +462,7 @@ class Viz(Extractor):
 
     def _authorised(self, manga_id: str, referer: str) -> bool:
         """Whether `/manga/auth` lets the signed-in account read a members-only chapter."""
-        res = self._patiently(AUTH_API, referer, params={"device_id": 3, "manga_id": manga_id})
+        res = self._api(AUTH_API, referer, params={"device_id": 3, "manga_id": manga_id})
         try:
             body = res.json()
         except ValueError:
@@ -476,7 +476,7 @@ class Viz(Extractor):
 
     def _signed(self, api_url: str, referer: str) -> str | None:
         """The signed URL the page API hands back for one page, or None when it says no."""
-        res = self._patiently(api_url, referer)
+        res = self._api(api_url, referer)
         try:
             body = res.json()
         except ValueError:
@@ -487,9 +487,14 @@ class Viz(Extractor):
         signed = body["data"].get(page)
         return signed if isinstance(signed, str) and signed.startswith("https://") else None
 
-    def _patiently(self, url: str, referer: str, params: dict[str, str | int] | None = None) -> Response:
-        """GET one of the reader's API endpoints, waiting out a 429 the way `BACKOFF` says."""
-        headers = {**self.HEADERS, **_XHR, "Referer": referer}
+    def _api(self, url: str, referer: str, params: dict[str, str | int] | None = None) -> Response:
+        """GET one of the reader's API endpoints, waiting out its 429s."""
+        res = self._patiently(url, {**self.HEADERS, **_XHR, "Referer": referer}, params)
+        res.raise_for_status()
+        return res
+
+    def _patiently(self, url: str, headers: dict[str, str], params: dict[str, str | int] | None = None) -> Response:
+        """GET `url`, waiting out a 429 the way `BACKOFF` says; the last answer, whatever its status."""
         for wait in (*BACKOFF, None):
             res = self._session.get(url, headers=headers, params=params, timeout=self.TIMEOUT)
             if res.status_code != HTTPStatus.TOO_MANY_REQUESTS or wait is None:
@@ -498,7 +503,6 @@ class Viz(Extractor):
             delay = int(asked) if asked.isdigit() else wait
             _log.info("viz: too many requests; waiting %d seconds.", delay)
             time.sleep(delay)
-        res.raise_for_status()
         return res
 
     @staticmethod
@@ -513,7 +517,7 @@ class Viz(Extractor):
         return self._series[key]
 
     def _page(self, url: str) -> Response:
-        res = self._session.get(url, headers=self.HEADERS, timeout=self.TIMEOUT)
+        res = self._patiently(url, self.HEADERS)
         if res.status_code == HTTPStatus.NOT_FOUND:
             msg = f"{url} is not there (404)."
             raise NotAnEpisodePageError(msg)
