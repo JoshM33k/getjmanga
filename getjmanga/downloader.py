@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -108,14 +109,26 @@ class Downloader:
         if not pages_there:
             if not episode.readable:
                 return Result(episode, save_dir, "locked", archive)
-            save_dir.mkdir(parents=True, exist_ok=True)
+            # Written aside and moved into place once complete, so that an episode cut
+            # short (a failed request, Ctrl-C) is not taken for saved on the next run.
+            partial = save_dir.with_name(f"_{save_dir.name}.part")
+            if partial.exists():
+                shutil.rmtree(partial)
+            partial.mkdir(parents=True)
             if self.save_metadata:
-                (save_dir / "metadata.json").write_text(
+                (partial / "metadata.json").write_text(
                     # `default` is for the date; everything else the extractors hand over is plain JSON.
                     json.dumps(asdict(episode), indent=4, ensure_ascii=False, default=str),
                     encoding="utf-8",
                 )
-            self._save_pages(episode, save_dir)
+            self._save_pages(episode, partial)
+            if save_dir.exists():
+                # `overwrite`: the new files replace the old ones of the same name.
+                for path in partial.iterdir():
+                    path.replace(save_dir / path.name)
+                partial.rmdir()
+            else:
+                partial.rename(save_dir)
         if archive is not None and not archive_there:
             self._pack(episode, save_dir, archive)
         return Result(episode, save_dir, "saved", archive)

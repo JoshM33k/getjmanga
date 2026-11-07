@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import ClassVar
 
 import pytest
+from cbz import ComicInfo
 from httpx2 import HTTPStatusError, Request, Response
 
 from getjmanga import __version__
@@ -19,10 +20,10 @@ def test_parse_args_defaults():
     parsed = parse_args(["https://mangabu.jp/episodes/1"])
     assert parsed.urls == ["https://mangabu.jp/episodes/1"]
     assert parsed.extractor is None
-    # -b, -C, -d, -F, -m and -o are left to the config file until `apply_config` settles them.
+    # -b, -C, -d, -F, -K, -m and -o are left to the config file until `apply_config` settles them.
     assert (parsed.bulk, parsed.savedir, parsed.overwrite) == (None, None, None)
     assert (parsed.first, parsed.quiet, parsed.verbose) == (False, False, False)
-    assert (parsed.format, parsed.cbz, parsed.metadata) == (None, None, None)
+    assert (parsed.format, parsed.cbz, parsed.kindle, parsed.metadata) == (None, None, None, None)
 
 
 def test_apply_config_fills_in_what_the_command_line_left_out():
@@ -307,6 +308,37 @@ def test_format_and_cbz_reach_the_downloader(recording, capsys, tmp_path):
     assert (tmp_path / "mangabu.jp" / "S" / "ep1" / "0.webp").exists()
     assert (tmp_path / "mangabu.jp" / "S" / "_cbz" / "ep1.cbz").exists()
     assert "saved: mangabu.jp/S/ep1" in capsys.readouterr().out
+
+
+def test_kindle_makes_books_of_the_series_once_everything_is_downloaded(recording, capsys, tmp_path):
+    main(["-K", "-b", "https://mangabu.jp/episodes/0"])
+    comic = ComicInfo.from_cbz(tmp_path / "mangabu.jp" / "S" / "_kindle" / "S 001-010.cbz")
+    assert comic.title == "S 001-010"
+    assert [page.bookmark for page in comic.pages] == ["ep1", "ep2", "ep3"]
+    assert capsys.readouterr().out.count("book:") == 1
+
+
+def test_per_book_sets_how_many_chapters_a_book_holds(recording, tmp_path):
+    main(["-K", "--per-book", "2", "-b", "https://mangabu.jp/episodes/0"])
+    books = sorted(path.name for path in (tmp_path / "mangabu.jp" / "S" / "_kindle").iterdir())
+    assert books == ["S 001-002.cbz", "S 003-004.cbz"]
+
+
+def test_kindle_leaves_a_book_alone_when_nothing_in_it_is_new(recording, capsys, tmp_path):
+    main(["-K", "https://mangabu.jp/episodes/0"])
+    book = tmp_path / "mangabu.jp" / "S" / "_kindle" / "S 001-010.cbz"
+    book.write_bytes(b"kept")
+    capsys.readouterr()
+    main(["-K", "https://mangabu.jp/episodes/0"])
+    assert book.read_bytes() == b"kept"
+    assert "book:" not in capsys.readouterr().out
+
+
+def test_kindle_writes_a_missing_book_from_chapters_already_on_disk(recording, tmp_path):
+    main(["https://mangabu.jp/episodes/0"])
+    main(["-K", "https://mangabu.jp/episodes/0"])
+    assert recording.instances[1].images == 0
+    assert (tmp_path / "mangabu.jp" / "S" / "_kindle" / "S 001-010.cbz").exists()
 
 
 def test_an_existing_episode_is_skipped(recording, capsys, tmp_path):
@@ -741,6 +773,7 @@ def test_config_savedir_expands_the_home_directory(isolated_config):
         ("bulk", "false", False),
         ("both", "true", True),
         ("cbz", "true", True),
+        ("kindle", "true", True),
         ("metadata", "true", True),
     ],
 )
@@ -815,7 +848,10 @@ def test_config_check_points_out_what_nothing_would_act_on(isolated_config, tmp_
     out, err = capsys.readouterr()
     assert out == ""
     assert [line.removeprefix(f"{isolated_config}: ") for line in err.splitlines()] == [
-        "save_dir: nothing reads it; the keys are savedir, overwrite, bulk, both, format, cbz, metadata, site, patrol.",
+        (
+            "save_dir: nothing reads it; the keys are savedir, overwrite, bulk, both, format, cbz, kindle, metadata,"
+            " site, patrol."
+        ),
         f"savedir: {tmp_path / 'file'} is not a directory.",
         "[site.example.com]: no extractor reads it; see `getjmanga --list-extractors`.",
         "[[patrol]] https://mangabu.jp/episodes/1: listed twice.",

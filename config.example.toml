@@ -7,6 +7,7 @@ bulk = false
 both = true
 format = "jpg"
 cbz = false
+kindle = false
 metadata = false
 
 # targets of `jm patrol`
@@ -133,6 +134,7 @@ patrol = [
     {url = "https://note.com/carula/magazines", search = true},
     {url = "https://gakcomic.gakken.jp/comic/", search = true},
     {url = "https://www.cmoa.jp/", search = true},
+    {url = "https://www.viz.com/shonenjump", search = true},
 ]
 
 # [site."foobar"]

@@ -9,6 +9,7 @@ from argparse import (
     Action,
     ArgumentDefaultsHelpFormatter,
     ArgumentParser,
+    ArgumentTypeError,
     BooleanOptionalAction,
     Namespace,
     RawDescriptionHelpFormatter,
@@ -19,7 +20,7 @@ from urllib.parse import urlparse
 
 from httpx2 import HTTPError
 
-from . import __version__
+from . import __version__, kindle
 from .config import (
     KEYS,
     Config,
@@ -88,6 +89,15 @@ def extractor_list() -> str:
     return "\n".join(lines)
 
 
+def not_negative(value: str) -> int:
+    """A whole number, 0 or above, for `--per-book`."""
+    number = int(value)
+    if number < 0:
+        msg = f"{value} is below 0"
+        raise ArgumentTypeError(msg)
+    return number
+
+
 def parse_args(args: list[str] | None = None, *, patrol: bool = False) -> Namespace:
     """Parse the command line.
 
@@ -133,7 +143,7 @@ def parse_args(args: list[str] | None = None, *, patrol: bool = False) -> Namesp
             action="store_true",
             help="remember each url in the config file, for `%(prog)s patrol` to download what is new",
         )
-        # `-b`, `-B`, `-C`, `-d`, `-F`, `-m` and `-o` default to None so that the config file can fill them in.
+        # `-b`, `-B`, `-C`, `-d`, `-F`, `-K`, `-m` and `-o` default to None so that the config file can fill them in.
         chain = parser.add_mutually_exclusive_group()
         chain.add_argument("-b", "--bulk", action=BooleanOptionalAction, help="follow every next episode")
         chain.add_argument("-B", "--both", action=BooleanOptionalAction, help="follow every previous episode too")
@@ -152,6 +162,20 @@ def parse_args(args: list[str] | None = None, *, patrol: bool = False) -> Namesp
         "--cbz",
         action=BooleanOptionalAction,
         help="also pack the saved pages into <series>/_cbz/<episode>.cbz (pages already saved are packed as they are)",
+    )
+    parser.add_argument(
+        "-K",
+        "--kindle",
+        action=BooleanOptionalAction,
+        help="once downloaded, put the chapters of the series saved so far into comic archives of ten chapters"
+        " each, for calibre to convert for a Kindle: <series>/_kindle/<series> 001-010.cbz and so on",
+    )
+    parser.add_argument(
+        "--per-book",
+        metavar="N",
+        type=not_negative,
+        default=kindle.PER_BOOK,
+        help="how many chapters -K puts in one book; 0 puts the whole series in <series>/_kindle/<series>.cbz",
     )
     parser.add_argument("-o", "--overwrite", action=BooleanOptionalAction, help="download again if it exists")
     parser.add_argument("-m", "--metadata", action=BooleanOptionalAction, help="save episode metadata as json")
@@ -206,6 +230,8 @@ def apply_config(parsed: Namespace, config: Config) -> None:
         parsed.format = config.format if config.format is not None else "jpg"
     if parsed.cbz is None:
         parsed.cbz = config.cbz
+    if parsed.kindle is None:
+        parsed.kindle = config.kindle
     if parsed.metadata is None:
         parsed.metadata = config.metadata
     # `-b` and `-B` rule each other out: one given on the command line (or turned
@@ -246,7 +272,7 @@ def parse_config_args(args: list[str]) -> Namespace:
         setter.add_argument("value", choices=("true", "false"))
     fmt = commands.add_parser("format", help="set what -F defaults to")
     fmt.add_argument("value", choices=get_args(Format), help="image format to save each page as")
-    for name, flag in (("cbz", "-C"), ("metadata", "-m")):
+    for name, flag in (("cbz", "-C"), ("kindle", "-K"), ("metadata", "-m")):
         setter = commands.add_parser(name, help=f"set whether {flag} is on by default")
         setter.add_argument("value", choices=("true", "false"))
     patrol = commands.add_parser("patrol", help="add a url for `getjmanga patrol`, without downloading it now")
@@ -538,6 +564,9 @@ class Runner:
         self._extractors: dict[type[Extractor], Extractor] = {}
         self._logged_in: set[tuple[str, str]] = set()
         self._prompted: dict[str, str] = {}
+        #: The series `-K` makes books of once everything is downloaded: their directory, their
+        #: title, and the chapter directories saved this time.
+        self._books: dict[Path, tuple[str, set[Path]]] = {}
 
     def extractor(self, url: str) -> Extractor:
         """The extractor for `url`: the one `-e` named, or the first that takes it."""
@@ -617,10 +646,33 @@ class Runner:
             finally:
                 # Whatever ended the work, the display comes down and says what it got through.
                 self.display.done()
+            if parsed.kindle:
+                self._want_books(visited)
             if series and all(result.status == "locked" for result in visited):
                 msg = f"no episode in the series at {url} was readable."
                 raise NothingReadableError(msg)
             return visited
+
+    def _want_books(self, visited: list[Result]) -> None:
+        """Note the series of `visited` for `books()`, with the chapters saved this time."""
+        for result in visited:
+            if result.status == "locked":
+                continue
+            series_dir = result.save_dir.parent
+            _, saved = self._books.setdefault(series_dir, (result.episode.series_title, set()))
+            if result.saved:
+                saved.add(result.save_dir)
+
+    def books(self) -> None:
+        """Write the books `-K` asked for: those with a chapter saved this time, and those not there yet."""
+        for series_dir, (title, saved) in self._books.items():
+            for book in kindle.plan(series_dir, title, self.parsed.per_book):
+                if book.path.exists() and not saved.intersection(book.chapters):
+                    continue
+                count = kindle.build(book)
+                size = book.path.stat().st_size / 1024 / 1024
+                logger.info("book: %s (%d chapters, %d pages, %.1f MB)", book.path, len(book.chapters), count, size)
+        self._books.clear()
 
     def visit(self, work: Work, *, bulk: bool | None = None, back: bool | None = None) -> Work | None:
         """Download `work`, the way `-S` stored it, and say what to store now.
@@ -766,6 +818,7 @@ def patrol_main(args: list[str]) -> None:
                 store_work(stored, parsed.config, replacing=work.url)
         except (GetjmangaError, HTTPError) as exc:
             logger.warning("skip: %s: %s", work.url, exc)
+    runner.books()
     logger.info("done.")
 
 
@@ -790,6 +843,7 @@ def main(args: list[str] | None = None) -> None:
             if parsed.store and stored is not None:
                 path = store_work(stored, parsed.config)
                 logger.info("stored: %s in %s", stored.url, path)
+        runner.books()
     except (GetjmangaError, HTTPError) as exc:
         logger.error("%s", exc)
         raise SystemExit(1) from exc

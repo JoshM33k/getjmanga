@@ -7,6 +7,7 @@ bulk = false                  # whether `-b` is on unless `--no-bulk` is given
 both = false                  # whether `-B` is on unless `--no-both` is given; not with bulk
 format = "jpg"                # what `-F` defaults to: jpg, png or webp
 cbz = false                   # whether `-C` is on unless `--no-cbz` is given
+kindle = false                # whether `-K` is on unless `--no-kindle` is given
 metadata = false              # whether `-m` is on unless `--no-metadata` is given
 
 [site."shonenjumpplus.com"]   # one GigaViewer site; each has an account of its own
@@ -35,7 +36,7 @@ extractor's `CONFIG_KEY`, so a per-host section beats the shared one.
 
 `jm config` writes the file: `init` lays down a commented template, `site`
 asks for an account, and `savedir` / `overwrite` / `bulk` / `both` / `format` /
-`cbz` / `metadata` set the defaults (`bulk` and `both` rule each other out: setting one
+`cbz` / `kindle` / `metadata` set the defaults (`bulk` and `both` rule each other out: setting one
 clears the other). `check` reads it back and points out what nothing would act
 on: a key nothing reads, a `savedir` that is not a directory, a `[site.<key>]`
 no extractor reads, a `[[patrol]]` url no extractor takes.
@@ -68,7 +69,7 @@ if TYPE_CHECKING:
 CONFIG_RELPATH = Path("getjmanga") / "config.toml"
 
 #: The top-level keys that stand in for a command line flag.
-Option = Literal["savedir", "overwrite", "bulk", "both", "format", "cbz", "metadata"]
+Option = Literal["savedir", "overwrite", "bulk", "both", "format", "cbz", "kindle", "metadata"]
 
 #: Every top-level key something reads; anything else is a typo, for `jm config check` to point out.
 KEYS: tuple[str, ...] = (*get_args(Option), "site", "patrol")
@@ -88,6 +89,7 @@ bulk = false
 both = false
 format = "jpg"
 cbz = false
+kindle = false
 metadata = false
 
 # targets of `jm patrol`
@@ -168,6 +170,8 @@ class Config:
     format: Format | None = None
     #: Whether `-C` is on by default.
     cbz: bool = False
+    #: Whether `-K` is on by default.
+    kindle: bool = False
     #: Whether `-m` is on by default.
     metadata: bool = False
     #: The top-level keys nothing reads, in file order, for `jm config check` to point out.
@@ -236,6 +240,7 @@ def load_config(path: Path | None = None) -> Config:
         both=both,
         format=cast("Format | None", fmt),
         cbz=_option(data, "cbz", bool, where) or False,
+        kindle=_option(data, "kindle", bool, where) or False,
         metadata=_option(data, "metadata", bool, where) or False,
         unknown=tuple(key for key in data if key not in KEYS),
     )
@@ -343,7 +348,7 @@ def set_option(name: Option, value: str | bool, path: Path | None = None) -> Pat
     """Write a top-level key, replacing the one already there.
 
     Args:
-        name: `savedir`, `overwrite`, `bulk`, `both`, `format`, `cbz` or `metadata`.
+        name: `savedir`, `overwrite`, `bulk`, `both`, `format`, `cbz`, `kindle` or `metadata`.
         value: A path for `savedir`, kept as given; `jpg`, `png` or `webp` for
             `format`; True or False for the others. Turning `bulk` on turns
             `both` off, and the other way round.
