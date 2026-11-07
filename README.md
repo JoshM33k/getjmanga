@@ -74,9 +74,12 @@ jm -F png https://takecomic.jp/episodes/74f33031e13cd
 # also pack the saved pages into <series>/_cbz/<episode>.cbz, with a ComicInfo.xml naming the work and its author
 jm -C https://takecomic.jp/episodes/74f33031e13cd
 
-# once downloaded, put every chapter of the series saved so far into one <series>/<series>.pdf for a
-# Kindle Scribe: grayscale, fitted to its screen, a bookmark per chapter; send it with Send to Kindle
+# once downloaded, put the chapters of the series saved so far into PDFs for a Kindle Scribe, ten
+# chapters each: <series>/_kindle/<series> 001-010.pdf, 011-020.pdf, ... -- grayscale, fitted to its
+# screen, a bookmark per chapter; a book is rewritten when a chapter of it is new
 jm -K https://www.viz.com/shonenjump/chapters/kagurabachi
+# five chapters each instead
+jm -K --per-book 5 https://www.viz.com/shonenjump/chapters/kagurabachi
 
 # every link on a page that some extractor takes
 jm -s https://shonenjumpplus.com/

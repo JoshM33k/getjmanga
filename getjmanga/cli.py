@@ -9,6 +9,7 @@ from argparse import (
     Action,
     ArgumentDefaultsHelpFormatter,
     ArgumentParser,
+    ArgumentTypeError,
     BooleanOptionalAction,
     Namespace,
     RawDescriptionHelpFormatter,
@@ -88,6 +89,15 @@ def extractor_list() -> str:
     return "\n".join(lines)
 
 
+def positive(value: str) -> int:
+    """A whole number above 0, for `--per-book`."""
+    number = int(value)
+    if number < 1:
+        msg = f"{value} is not above 0"
+        raise ArgumentTypeError(msg)
+    return number
+
+
 def parse_args(args: list[str] | None = None, *, patrol: bool = False) -> Namespace:
     """Parse the command line.
 
@@ -157,8 +167,15 @@ def parse_args(args: list[str] | None = None, *, patrol: bool = False) -> Namesp
         "-K",
         "--kindle",
         action=BooleanOptionalAction,
-        help="once downloaded, put every chapter of the series saved so far into <series>/<series>.pdf,"
-        " grayscale and sized for a Kindle Scribe, to send with Send to Kindle",
+        help="once downloaded, put the chapters of the series saved so far into PDFs for a Kindle Scribe,"
+        " grayscale and sized for its screen: <series>/_kindle/<series> 001-010.pdf and so on",
+    )
+    parser.add_argument(
+        "--per-book",
+        metavar="N",
+        type=positive,
+        default=kindle.PER_BOOK,
+        help="how many chapters -K puts in one book",
     )
     parser.add_argument("-o", "--overwrite", action=BooleanOptionalAction, help="download again if it exists")
     parser.add_argument("-m", "--metadata", action=BooleanOptionalAction, help="save episode metadata as json")
@@ -547,8 +564,9 @@ class Runner:
         self._extractors: dict[type[Extractor], Extractor] = {}
         self._logged_in: set[tuple[str, str]] = set()
         self._prompted: dict[str, str] = {}
-        #: The series `-K` makes a book of once everything is downloaded: their directory and title.
-        self._books: dict[Path, str] = {}
+        #: The series `-K` makes books of once everything is downloaded: their directory, their
+        #: title, and the chapter directories saved this time.
+        self._books: dict[Path, tuple[str, set[Path]]] = {}
 
     def extractor(self, url: str) -> Extractor:
         """The extractor for `url`: the one `-e` named, or the first that takes it."""
@@ -636,26 +654,24 @@ class Runner:
             return visited
 
     def _want_books(self, visited: list[Result]) -> None:
-        """Mark the series of `visited` for `books()`: those with a chapter new on disk, or no book yet."""
+        """Note the series of `visited` for `books()`, with the chapters saved this time."""
         for result in visited:
             if result.status == "locked":
                 continue
             series_dir = result.save_dir.parent
-            if result.saved or not book_path(series_dir).exists():
-                self._books[series_dir] = result.episode.series_title
+            _, saved = self._books.setdefault(series_dir, (result.episode.series_title, set()))
+            if result.saved:
+                saved.add(result.save_dir)
 
     def books(self) -> None:
-        """Write the book of every series `-K` marked, with every chapter of it on disk."""
-        for series_dir, title in self._books.items():
-            out = book_path(series_dir)
-            count = kindle.build(series_dir, title, out)
-            if not count:
-                continue
-            logger.info("book: %s (%d pages, %.1f MB)", out, count, out.stat().st_size / 1024 / 1024)
-            if out.stat().st_size > kindle.SEND_LIMIT:
-                logger.warning(
-                    "warning: %s is over the 200 MB Send to Kindle takes; copy it over USB instead.", out.name
-                )
+        """Write the books `-K` asked for: those with a chapter saved this time, and those not there yet."""
+        for series_dir, (title, saved) in self._books.items():
+            for book in kindle.plan(series_dir, title, self.parsed.per_book):
+                if book.path.exists() and not saved.intersection(book.chapters):
+                    continue
+                count = kindle.build(book)
+                size = book.path.stat().st_size / 1024 / 1024
+                logger.info("book: %s (%d chapters, %d pages, %.1f MB)", book.path, len(book.chapters), count, size)
         self._books.clear()
 
     def visit(self, work: Work, *, bulk: bool | None = None, back: bool | None = None) -> Work | None:
@@ -754,11 +770,6 @@ class Runner:
             except (GetjmangaError, HTTPError) as exc:
                 logger.warning("skip: %s: %s", link, exc)
         return links
-
-
-def book_path(series_dir: Path) -> Path:
-    """Where `-K` writes the book of a series: `<series>/<series>.pdf`."""
-    return series_dir / f"{series_dir.name}.pdf"
 
 
 def make_runner(parsed: Namespace) -> Runner:

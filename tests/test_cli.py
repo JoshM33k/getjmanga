@@ -311,24 +311,37 @@ def test_format_and_cbz_reach_the_downloader(recording, capsys, tmp_path):
     assert "saved: mangabu.jp/S/ep1" in capsys.readouterr().out
 
 
-def test_kindle_makes_one_book_of_the_series_once_everything_is_downloaded(recording, capsys, tmp_path):
+def test_kindle_makes_books_of_the_series_once_everything_is_downloaded(recording, capsys, tmp_path):
     main(["-K", "-b", "https://mangabu.jp/episodes/0"])
-    book = tmp_path / "mangabu.jp" / "S" / "S.pdf"
+    book = tmp_path / "mangabu.jp" / "S" / "_kindle" / "S 001-010.pdf"
     reader = PdfReader(book)
     assert reader.metadata is not None
-    assert reader.metadata.title == "S"
+    assert reader.metadata.title == "S 001-010"
     assert [mark.title for mark in reader.outline if isinstance(mark, Destination)] == ["ep1", "ep2", "ep3"]
     assert capsys.readouterr().out.count("book:") == 1
 
 
-def test_kindle_leaves_the_book_alone_when_nothing_is_new(recording, capsys, tmp_path):
+def test_per_book_sets_how_many_chapters_a_book_holds(recording, tmp_path):
+    main(["-K", "--per-book", "2", "-b", "https://mangabu.jp/episodes/0"])
+    books = sorted(path.name for path in (tmp_path / "mangabu.jp" / "S" / "_kindle").iterdir())
+    assert books == ["S 001-002.pdf", "S 003-004.pdf"]
+
+
+def test_kindle_leaves_a_book_alone_when_nothing_in_it_is_new(recording, capsys, tmp_path):
     main(["-K", "https://mangabu.jp/episodes/0"])
-    book = tmp_path / "mangabu.jp" / "S" / "S.pdf"
+    book = tmp_path / "mangabu.jp" / "S" / "_kindle" / "S 001-010.pdf"
     book.write_bytes(b"kept")
     capsys.readouterr()
     main(["-K", "https://mangabu.jp/episodes/0"])
     assert book.read_bytes() == b"kept"
     assert "book:" not in capsys.readouterr().out
+
+
+def test_kindle_writes_a_missing_book_from_chapters_already_on_disk(recording, tmp_path):
+    main(["https://mangabu.jp/episodes/0"])
+    main(["-K", "https://mangabu.jp/episodes/0"])
+    assert recording.instances[1].images == 0
+    assert (tmp_path / "mangabu.jp" / "S" / "_kindle" / "S 001-010.pdf").exists()
 
 
 def test_an_existing_episode_is_skipped(recording, capsys, tmp_path):

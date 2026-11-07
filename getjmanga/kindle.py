@@ -1,10 +1,14 @@
-"""`-K`: every chapter of a series saved on disk, as one PDF to send to a Kindle Scribe.
+"""`-K`: the chapters of a series saved on disk, as PDFs of ten chapters each, for a Kindle Scribe.
 
-Send to Kindle keeps a PDF as it is (an EPUB gets converted), and on a Scribe
-a PDF shows one page per screen and can be written on. Each page is turned
-grayscale, which is all the screen shows, and scaled down to fit the screen,
-so the file stays a fraction of the pages' size. The chapters are bookmarked,
-so the Kindle's table of contents jumps to one.
+A PDF goes onto a Scribe as it is (through calibre, over USB), shows one page
+per screen and can be written on. Each page is turned grayscale, which is all
+the screen shows, and scaled down to fit the screen, so a book stays a fraction
+of the pages' size. The chapters are bookmarked, so the Kindle's table of
+contents jumps to one.
+
+A book holds the chapters numbered 1-10, 11-20 and so on, whichever of them
+are on disk, so a book is named after the range and keeps its name as the
+chapters come in: `<series>/_kindle/<series> 011-020.pdf`.
 
 The PDF is written out by hand rather than by Pillow, which holds every page
 in memory until the end: here each page is encoded, written and let go.
@@ -14,6 +18,7 @@ from __future__ import annotations
 
 import io
 import re
+from dataclasses import dataclass
 from typing import IO, TYPE_CHECKING
 
 from PIL import Image
@@ -28,22 +33,34 @@ SCREEN = (1860, 2480)
 #: The Scribe's pixel density, which sets the size a page claims to be.
 DPI = 300
 
-#: The largest file Send to Kindle takes through its app or web page (by email it is 50 MB).
-SEND_LIMIT = 200 * 1024 * 1024
-
 #: The JPEG quality each page is encoded at.
 QUALITY = 85
+
+#: How many chapters a book holds unless `--per-book` says otherwise.
+PER_BOOK = 10
+
+#: The directory under a series where the books go.
+KINDLE_DIR = "_kindle"
 
 #: The image files a chapter directory holds, as `Downloader` writes them.
 _SUFFIXES = frozenset({".jpg", ".png", ".webp"})
 
 
+@dataclass(frozen=True)
+class Book:
+    """One PDF to write: where, under what title, and which chapters go in it."""
+
+    path: Path
+    title: str
+    chapters: tuple[Path, ...]
+
+
 def chapters(series_dir: Path) -> list[Path]:
     """The chapter directories of a series, in reading order.
 
-    Directories starting with `_` (`_cbz`) are skipped, and so is anything
-    with no page in it. The order is the names', with the numbers in them
-    compared as numbers: "Chapter 9" comes before "Chapter 10".
+    Directories starting with `_` (`_cbz`, `_kindle`) are skipped, and so is
+    anything with no page in it. The order is the names', with the numbers in
+    them compared as numbers: "Chapter 9" comes before "Chapter 10".
 
     Args:
         series_dir: `<savedir>/<host>/<series>`.
@@ -63,25 +80,47 @@ def pages(chapter_dir: Path) -> list[Path]:
     )
 
 
-def build(series_dir: Path, title: str, out: Path) -> int:
-    """Write every chapter of a series into one PDF.
+def plan(series_dir: Path, title: str, per_book: int = PER_BOOK) -> list[Book]:
+    """The books the chapters of a series on disk go into.
+
+    A chapter's number is the first number in its directory name ("Chapter
+    112.1" is 112); a chapter with none counts by its place in the list.
+    Chapters 1 to `per_book` go into the first book, and so on.
 
     Args:
         series_dir: `<savedir>/<host>/<series>`, whose chapter directories to read.
-        title: The series title, which the Kindle shows the book as.
-        out: The PDF to write; replaced if it is there.
+        title: The series title; each book is titled after it and its range.
+        per_book: How many chapter numbers a book covers.
 
     Returns:
-        How many pages were written; 0 writes nothing.
+        One book per range that has a chapter on disk, in order.
     """
-    contents = [(chapter.name, pages(chapter)) for chapter in chapters(series_dir)]
-    if not contents:
-        return 0
-    out.parent.mkdir(parents=True, exist_ok=True)
-    partial = out.with_name(out.name + ".part")
+    groups: dict[int, list[Path]] = {}
+    for index, chapter in enumerate(chapters(series_dir)):
+        found = re.search(r"\d+", chapter.name)
+        number = int(found.group()) if found else index + 1
+        groups.setdefault((max(number, 1) - 1) // per_book, []).append(chapter)
+    books = []
+    for group, members in sorted(groups.items()):
+        span = f"{group * per_book + 1:03d}-{(group + 1) * per_book:03d}"
+        books.append(Book(series_dir / KINDLE_DIR / f"{series_dir.name} {span}.pdf", f"{title} {span}", tuple(members)))
+    return books
+
+
+def build(book: Book) -> int:
+    """Write one book.
+
+    Args:
+        book: What to write and where; the file is replaced if it is there.
+
+    Returns:
+        How many pages were written.
+    """
+    book.path.parent.mkdir(parents=True, exist_ok=True)
+    partial = book.path.with_name(book.path.name + ".part")
     with partial.open("wb") as file:
-        count = _Writer(file).write(title, contents)
-    partial.replace(out)
+        count = _Writer(file).write(book.title, [(chapter.name, pages(chapter)) for chapter in book.chapters])
+    partial.replace(book.path)
     return count
 
 
